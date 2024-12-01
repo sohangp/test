@@ -1,63 +1,75 @@
 # test
+
 import com.prowidesoftware.swift.model.mx.MxPain00100112;
-import com.prowidesoftware.swift.model.mx.MxPacs00900107;
-import com.prowidesoftware.swift.model.mx.dic.*; // Prowide dictionary for ISO 20022
+import com.prowidesoftware.swift.model.mx.MxPacs00800107;
+import com.prowidesoftware.swift.model.mx.dic.*; // Provides access to ISO 20022 dictionary classes
 import java.util.*;
 
-public class ISOMessageConverter {
+public class PainToPacsConverter {
 
     public static void main(String[] args) {
-        String painMessageXml = "<message>...your XML here...</message>"; // Input pain.001 XML
-        
-        // Parse the pain.001.001.12 message from XML into an MxPain00100112 object
-        MxPain00100112 pain001 = MxPain00100112.parse(painMessageXml);
-        if (pain001 == null || pain001.getCstmrCdtTrfInitn() == null) {
+        // 1. Parse a given pain.001 XML input (e.g., customer payment initiation message)
+        String painXml = "<XML content for pain.001.001.12 here>"; // Replace with your actual XML input
+
+        // Parse into MxPain00100112 object
+        MxPain00100112 painMessage = MxPain00100112.parse(painXml);
+        if (painMessage == null || painMessage.getCstmrCdtTrfInitn() == null) {
             System.out.println("Invalid pain.001.001.12 message");
             return;
         }
 
-        // Create a new MxPacs00900107 object for the target message
-        MxPacs00900107 pacs009 = new MxPacs00900107();
-        FIToFICustomerCreditTransferV07 creditTransfer = new FIToFICustomerCreditTransferV07();
-        pacs009.setFIToFICstmrCdtTrf(creditTransfer);
+        // Extract the customer credit transfer initiation part
+        CustomerCreditTransferInitiationV12 cstmrCdtTrfInitn = painMessage.getCstmrCdtTrfInitn();
 
-        // Map fields from pain.001.001.12 to pacs.009.001.07
-        CustomerCreditTransferInitiationV12 cstmrCdtTrf = pain001.getCstmrCdtTrfInitn();
+        // 2. Create the target pacs.008.001.07 message
+        MxPacs00800107 pacsMessage = new MxPacs00800107();
 
-        // Map group header
-        GroupHeader33 groupHeader = new GroupHeader33();
-        groupHeader.setMsgId(cstmrCdtTrf.getGrpHdr().getMsgId());
-        groupHeader.setCreDtTm(cstmrCdtTrf.getGrpHdr().getCreDtTm());
-        creditTransfer.setGrpHdr(groupHeader);
+        FIToFICustomerCreditTransferV07 fiToFiCstmrCdtTrf = new FIToFICustomerCreditTransferV07();
+        pacsMessage.setFIToFICstmrCdtTrf(fiToFiCstmrCdtTrf);
 
-        // Map payment transactions
-        for (PaymentInstructionInformation3 payment : cstmrCdtTrf.getPmtInf()) {
-            CreditTransferTransaction33 transfer = new CreditTransferTransaction33();
+        // 3. Map the group header fields
+        GroupHeader33 painGrpHdr = cstmrCdtTrfInitn.getGrpHdr();
+        GroupHeader70 pacsGrpHdr = new GroupHeader70();
 
-            // Set payment ID
-            PaymentIdentification1 paymentId = new PaymentIdentification1();
-            paymentId.setInstrId(payment.getPmtInfId());
-            transfer.setPmtId(paymentId);
+        pacsGrpHdr.setMsgId(painGrpHdr.getMsgId()); // Map message ID
+        pacsGrpHdr.setCreDtTm(painGrpHdr.getCreDtTm()); // Map creation date and time
 
-            // Map amount
-            ActiveCurrencyAndAmount amount = new ActiveCurrencyAndAmount();
-            amount.setCcy(payment.getCdtTrfTxInf().get(0).getInstdAmt().getCcy());
-            amount.setValue(payment.getCdtTrfTxInf().get(0).getInstdAmt().getValue());
-            transfer.setIntrBkSttlmAmt(amount);
+        // Additional mappings for group header (e.g., settlement information, initiating agent)
+        pacsGrpHdr.setSttlmInf(new SettlementInstruction4()); // Example: Add settlement info if available
+        fiToFiCstmrCdtTrf.setGrpHdr(pacsGrpHdr);
 
-            // Map debtor and creditor info
-            transfer.setDbtr(payment.getDbtr());
-            transfer.setDbtrAcct(payment.getDbtrAcct());
-            transfer.setCdtr(payment.getCdtTrfTxInf().get(0).getCdtr());
-            transfer.setCdtrAcct(payment.getCdtTrfTxInf().get(0).getCdtrAcct());
+        // 4. Map each payment instruction in pain.001 to credit transfer transactions in pacs.008
+        for (PaymentInstructionInformation3 pmtInf : cstmrCdtTrfInitn.getPmtInf()) {
+            for (CreditTransferTransaction33 cdtTrfTx : pmtInf.getCdtTrfTxInf()) {
+                CreditTransferTransaction39 pacsCdtTrfTx = new CreditTransferTransaction39();
 
-            // Add the transaction to the PACS message
-            creditTransfer.getCdtTrfTxInf().add(transfer);
+                // Map payment information and identifiers
+                pacsCdtTrfTx.setPmtId(new PaymentIdentification7());
+                pacsCdtTrfTx.getPmtId().setInstrId(cdtTrfTx.getPmtId().getInstrId());
+                pacsCdtTrfTx.getPmtId().setEndToEndId(cdtTrfTx.getPmtId().getEndToEndId());
+
+                // Map amount and currency
+                ActiveCurrencyAndAmount instdAmt = cdtTrfTx.getIntrBkSttlmAmt();
+                pacsCdtTrfTx.setIntrBkSttlmAmt(new ActiveCurrencyAndAmount(instdAmt.getValue(), instdAmt.getCcy()));
+
+                // Map debtor information
+                pacsCdtTrfTx.setDbtr(pmtInf.getDbtr()); // Debtor
+                pacsCdtTrfTx.setDbtrAcct(pmtInf.getDbtrAcct()); // Debtor Account
+                pacsCdtTrfTx.setDbtrAgt(pmtInf.getDbtrAgt()); // Debtor Agent
+
+                // Map creditor information
+                pacsCdtTrfTx.setCdtr(cdtTrfTx.getCdtr()); // Creditor
+                pacsCdtTrfTx.setCdtrAcct(cdtTrfTx.getCdtrAcct()); // Creditor Account
+                pacsCdtTrfTx.setCdtrAgt(cdtTrfTx.getCdtrAgt()); // Creditor Agent
+
+                // Add the mapped transaction to the PACS message
+                fiToFiCstmrCdtTrf.getCdtTrfTxInf().add(pacsCdtTrfTx);
+            }
         }
 
-        // Serialize the resulting MxPacs00900107 into XML
-        String pacs009Xml = pacs009.message();
-        System.out.println("Resulting pacs.009.001.07 XML:");
-        System.out.println(pacs009Xml);
+        // 5. Serialize the resulting pacs.008.001.07 message into XML
+        String pacsXml = pacsMessage.message();
+        System.out.println("Generated pacs.008.001.07 XML:");
+        System.out.println(pacsXml);
     }
 }
